@@ -1,0 +1,54 @@
+"""Bounded, expiring, isolated session store. Sessions are keyed by (profile, session_id)."""
+from __future__ import annotations
+
+import re
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Callable
+
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+@dataclass
+class Session:
+    key: tuple[str, str]
+    created: float
+    last_seen: float
+    history: list[tuple[str, str]] = field(default_factory=list)   # (role, clipped text)
+    pressure: int = 0                                              # persuasion turns seen so far
+
+
+class SessionStore:
+    def __init__(self, ttl: int, max_sessions: int, max_turns: int, clock: Callable[[], float] = time.monotonic):
+        self.ttl, self.max_sessions, self.max_turns, self.clock = ttl, max_sessions, max_turns, clock
+        self._s: OrderedDict[tuple[str, str], Session] = OrderedDict()
+
+    def _sweep(self) -> None:
+        now = self.clock()
+        for k in [k for k, s in self._s.items() if now - s.last_seen > self.ttl]:
+            del self._s[k]
+
+    def get(self, profile: str, session_id: str) -> Session:
+        self._sweep()
+        key = (profile, session_id)
+        now = self.clock()
+        sess = self._s.get(key)
+        if sess is None:
+            while len(self._s) >= self.max_sessions:
+                self._s.popitem(last=False)
+            sess = self._s[key] = Session(key, now, now)
+        sess.last_seen = now
+        self._s.move_to_end(key)
+        return sess
+
+    def record(self, sess: Session, user: str, reply: str) -> None:
+        sess.history += [("user", user[:300]), ("assistant", reply[:300])]
+        del sess.history[: max(0, len(sess.history) - 2 * self.max_turns)]
+
+    def clear(self) -> None:
+        self._s.clear()
+
+    def __len__(self) -> int:
+        self._sweep()
+        return len(self._s)

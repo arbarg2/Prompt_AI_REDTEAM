@@ -1,0 +1,16 @@
+services:
+  target:
+    build: .
+    env_file: .env          # must define TARGET_API_KEY and ADMIN_API_KEY
+    ports:
+      - "8000:8000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    deploy:
+      replicas: 1           # in-memory state: do not scale out
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
